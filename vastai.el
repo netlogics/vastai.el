@@ -316,5 +316,43 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
         (vastai--display (format "Template: %s" name)
                          (vastai--template-details template))))))
 
+(defun vastai--fetch-charges (days)
+  "Fetch charges for the last DAYS days. Returns vector of alists."
+  (let* ((now (float-time))
+         (start (- now (* days 86400)))
+         (params `(("select_filters"
+                    ,(json-encode `((day . ((gte . ,(round start))
+                                           (lte . ,(round now)))))))
+                   ("latest_first" "true")
+                   ("limit" "100")))
+         (result (vastai--request "GET" "/api/v0/charges/" params)))
+    (when result
+      (or (alist-get 'charges result) []))))
+
+(defun vastai--format-charge (charge)
+  "Format a CHARGE alist as a single display line."
+  (format "%-12s %-20s $%8.4f  %s"
+          (alist-get 'id charge "")
+          (or (alist-get 'type charge) "")
+          (/ (or (alist-get 'amount_cents charge) 0) 100.0)
+          (or (alist-get 'description charge) "")))
+
+(defun vastai-show-costs ()
+  "Fetch and display recent Vast.ai charges in the *vastai* buffer."
+  (interactive)
+  (let* ((days-str (read-string "Days to show (default 7): " nil nil "7"))
+         (days (string-to-number days-str))
+         (charges (vastai--fetch-charges days))
+         (total (/ (seq-reduce (lambda (acc c)
+                                 (+ acc (or (alist-get 'amount_cents c) 0)))
+                               charges 0)
+                   100.0)))
+    (if (seq-empty-p charges)
+        (message "vastai: no charges found for last %d days" days)
+      (vastai--display
+       (format "Charges — last %d days" days)
+       (concat (mapconcat #'vastai--format-charge charges "\n")
+               (format "\n\n%-34s $%8.4f" "TOTAL" total))))))
+
 (provide 'vastai)
 ;;; vastai.el ends here
