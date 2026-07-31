@@ -354,5 +354,17 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
        (concat (mapconcat #'vastai--format-charge charges "\n")
                (format "\n\n%-34s $%8.4f" "TOTAL" total))))))
 
+;;;###autoload
+(transient-define-prefix vastai ()
+  "Vast.ai GPU cloud management."
+  ["Instances"
+   ("l" "List & act on instances" vastai-list-instances)]
+  ["Search"
+   ("s" "Search offers"           vastai-search-offers)]
+  ["Templates"
+   ("t" "List & select template"  vastai-list-templates)]
+  ["Costs"
+   ("c" "Show recent charges"     vastai-show-costs)])
+
 (provide 'vastai)
 ;;; vastai.el ends here
