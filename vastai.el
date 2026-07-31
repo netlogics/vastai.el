@@ -273,5 +273,48 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
         (vastai--display (format "Offer %s" id)
                          (vastai--offer-details offer))))))
 
+(defun vastai--fetch-templates ()
+  "Fetch list of templates from the API. Returns vector of alists."
+  (let ((result (vastai--request "GET" "/api/v0/template/")))
+    (when result
+      (or (alist-get 'templates result) []))))
+
+(defun vastai--format-template (template)
+  "Format TEMPLATE alist as a completing-read candidate string."
+  (format "%s | %s | %s"
+          (alist-get 'name template "")
+          (alist-get 'image template "")
+          (alist-get 'hash_id template "")))
+
+(defun vastai--template-details (template)
+  "Format TEMPLATE alist as a human-readable detail string."
+  (vastai--format-alist
+   (seq-filter (lambda (pair) (not (null (cdr pair))))
+               (list (cons "Name"    (alist-get 'name template))
+                     (cons "Image"   (alist-get 'image template))
+                     (cons "Hash ID" (alist-get 'hash_id template))
+                     (cons "Disk"    (when (alist-get 'recommended_disk_space template)
+                                       (format "%s GB"
+                                               (alist-get 'recommended_disk_space
+                                                          template))))
+                     (cons "SSH"     (when (alist-get 'use_ssh template)
+                                       (format "%s" (alist-get 'use_ssh template))))
+                     (cons "Created" (alist-get 'recent_create_date template))))))
+
+(defun vastai-list-templates ()
+  "List Vast.ai templates via completing-read and show details of selection."
+  (interactive)
+  (let* ((templates (vastai--fetch-templates))
+         (candidates (mapcar #'vastai--format-template templates)))
+    (if (seq-empty-p candidates)
+        (message "vastai: no templates found")
+      (let* ((choice (completing-read "Template: " candidates nil t))
+             (name (car (split-string choice " | " t)))
+             (template (seq-find (lambda (tmpl)
+                                   (equal (alist-get 'name tmpl) name))
+                                 templates)))
+        (vastai--display (format "Template: %s" name)
+                         (vastai--template-details template))))))
+
 (provide 'vastai)
 ;;; vastai.el ends here

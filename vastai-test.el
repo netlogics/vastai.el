@@ -119,5 +119,15 @@
   (let ((candidate "99887766 | 1x RTX 4090 | $0.2900/hr | US"))
     (should (equal (vastai--offer-id-from-candidate candidate) "99887766"))))
 
+(ert-deftest vastai-test-format-template ()
+  "Formats a template alist into a completing-read candidate string."
+  (let ((template '((name . "my-pytorch")
+                    (image . "vastai/pytorch:latest")
+                    (hash_id . "abc123def456"))))
+    (let ((result (vastai--format-template template)))
+      (should (string-match-p "my-pytorch" result))
+      (should (string-match-p "vastai/pytorch:latest" result))
+      (should (string-match-p "abc123def456" result)))))
+
 (provide 'vastai-test)
 ;;; vastai-test.el ends here
