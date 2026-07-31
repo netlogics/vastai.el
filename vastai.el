@@ -78,5 +78,23 @@ Returns parsed alist or nil on error."
       (prog1 (vastai--parse-json-response buf)
         (kill-buffer buf)))))
 
+(defun vastai--format-alist (alist)
+  "Format ALIST as aligned key: value lines."
+  (mapconcat (lambda (pair)
+               (format "%-24s %s" (car pair) (cdr pair)))
+             alist "\n"))
+
+(defun vastai--display (title content)
+  "Display CONTENT under TITLE in the *vastai* read-only buffer."
+  (let ((buf (get-buffer-create "*vastai*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert title "\n" (make-string (length title) ?─) "\n\n")
+        (insert content "\n"))
+      (special-mode)
+      (goto-char (point-min)))
+    (pop-to-buffer buf)))
+
 (provide 'vastai)
 ;;; vastai.el ends here

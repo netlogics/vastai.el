@@ -50,5 +50,24 @@
                            '[((id . 123))]))))
       (kill-buffer buf))))
 
+(ert-deftest vastai-test-display ()
+  "Opens *vastai* buffer with title and content."
+  (vastai--display "Test Title" "line one\nline two")
+  (unwind-protect
+      (with-current-buffer "*vastai*"
+        (let ((text (buffer-string)))
+          (should (string-match-p "Test Title" text))
+          (should (string-match-p "line one" text))
+          (should (string-match-p "line two" text))))
+    (kill-buffer "*vastai*")))
+
+(ert-deftest vastai-test-format-alist ()
+  "Formats an alist as aligned key: value lines."
+  (let ((result (vastai--format-alist '((Status . "running") (GPU . "RTX 4090")))))
+    (should (string-match-p "Status" result))
+    (should (string-match-p "running" result))
+    (should (string-match-p "GPU" result))
+    (should (string-match-p "RTX 4090" result))))
+
 (provide 'vastai-test)
 ;;; vastai-test.el ends here
