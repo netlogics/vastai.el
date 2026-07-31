@@ -44,5 +44,39 @@
       (user-error
        "vastai: set vastai-api-key or run: vastai set api-key <KEY>")))
 
+(defun vastai--build-url (endpoint &optional params)
+  "Build full API URL for ENDPOINT with optional query PARAMS alist."
+  (let ((url (concat vastai--base-url endpoint)))
+    (if params
+        (concat url "?" (url-build-query-string params))
+      url)))
+
+(defun vastai--parse-json-response (buf)
+  "Parse JSON body from HTTP response buffer BUF. Return alist or nil."
+  (with-current-buffer buf
+    (goto-char (point-min))
+    (when (re-search-forward "\r?\n\r?\n" nil t)
+      (condition-case err
+          (json-read)
+        (error (message "vastai: JSON parse error: %s" err) nil)))))
+
+(defun vastai--request (method endpoint &optional params body)
+  "Make a METHOD request to ENDPOINT with query PARAMS and JSON BODY.
+Returns parsed alist or nil on error."
+  (let* ((url-request-method method)
+         (url-request-extra-headers
+          `(("Authorization" . ,(concat "Bearer " (vastai--api-key)))
+            ("Content-Type" . "application/json")))
+         (url-request-data
+          (when body
+            (encode-coding-string (json-encode body) 'utf-8)))
+         (url (vastai--build-url endpoint params))
+         (buf (condition-case err
+                  (url-retrieve-synchronously url t t 30)
+                (error (message "vastai: HTTP error: %s" err) nil))))
+    (when buf
+      (prog1 (vastai--parse-json-response buf)
+        (kill-buffer buf)))))
+
 (provide 'vastai)
 ;;; vastai.el ends here
