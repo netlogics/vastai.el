@@ -88,5 +88,36 @@
   (let ((candidate "12345678 | running | 1x RTX 4090 | $0.3500/hr | my-label"))
     (should (equal (vastai--instance-id-from-candidate candidate) "12345678"))))
 
+(ert-deftest vastai-test-parse-filters-simple ()
+  "Parses key=value pairs into an alist with eq sub-alists."
+  (let ((result (vastai--parse-filters "gpu_name=RTX_4090 num_gpus=1")))
+    (should (equal (alist-get "gpu_name" result nil nil #'equal)
+                   '((eq . "RTX 4090"))))
+    (should (equal (alist-get "num_gpus" result nil nil #'equal)
+                   '((eq . "1"))))))
+
+(ert-deftest vastai-test-parse-filters-empty ()
+  "Returns nil for empty or nil filter string."
+  (should (null (vastai--parse-filters "")))
+  (should (null (vastai--parse-filters nil))))
+
+(ert-deftest vastai-test-format-offer ()
+  "Formats an offer alist into a completing-read candidate string."
+  (let ((offer '((id . 99887766)
+                 (gpu_name . "RTX 4090")
+                 (num_gpus . 1)
+                 (dph_total . 0.29)
+                 (geolocation . "US"))))
+    (let ((result (vastai--format-offer offer)))
+      (should (string-match-p "99887766" result))
+      (should (string-match-p "RTX 4090" result))
+      (should (string-match-p "0.29" result))
+      (should (string-match-p "US" result)))))
+
+(ert-deftest vastai-test-offer-id-from-candidate ()
+  "Extracts offer ID from a formatted candidate string."
+  (let ((candidate "99887766 | 1x RTX 4090 | $0.2900/hr | US"))
+    (should (equal (vastai--offer-id-from-candidate candidate) "99887766"))))
+
 (provide 'vastai-test)
 ;;; vastai-test.el ends here

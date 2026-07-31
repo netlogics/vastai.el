@@ -193,5 +193,85 @@ Returns parsed alist or nil on error."
              (id (vastai--instance-id-from-candidate choice)))
         (vastai--instance-action id)))))
 
+(defun vastai--parse-filters (filter-string)
+  "Parse FILTER-STRING like \"gpu_name=RTX_4090 num_gpus=1\" into alist.
+Each token must be KEY=VALUE. Underscores in values are replaced with spaces."
+  (when (and filter-string (not (string-empty-p filter-string)))
+    (mapcar (lambda (token)
+              (if (string-match "\\([^=]+\\)=\\(.+\\)" token)
+                  (cons (match-string 1 token)
+                        `((eq . ,(replace-regexp-in-string
+                                  "_" " " (match-string 2 token)))))
+                (user-error "vastai: invalid filter token: %s" token)))
+            (split-string filter-string " " t))))
+
+(defun vastai--build-search-body (user-filters)
+  "Build the complete JSON body alist for a bundle search request.
+USER-FILTERS is an alist from `vastai--parse-filters'."
+  (append '((verified . ((eq . t)))
+             (external . ((eq . :json-false)))
+             (rentable . ((eq . t)))
+             (type . "on-demand")
+             (allocated_storage . 5.0)
+             (order . [["score" "desc"]]))
+           user-filters))
+
+(defun vastai--fetch-offers (filter-string)
+  "Fetch offers matching FILTER-STRING. Returns vector of alists."
+  (let* ((user-filters (vastai--parse-filters filter-string))
+         (body (vastai--build-search-body user-filters))
+         (result (vastai--request "POST" "/api/v0/bundles/" nil body)))
+    (when result
+      (or (alist-get 'offers result) []))))
+
+(defun vastai--format-offer (offer)
+  "Format OFFER alist as a completing-read candidate string."
+  (format "%s | %dx %s | $%.4f/hr | %s"
+          (alist-get 'id offer "")
+          (alist-get 'num_gpus offer 0)
+          (alist-get 'gpu_name offer "")
+          (alist-get 'dph_total offer 0.0)
+          (alist-get 'geolocation offer "")))
+
+(defun vastai--offer-id-from-candidate (candidate)
+  "Extract offer ID string from a formatted CANDIDATE."
+  (car (split-string candidate " | " t)))
+
+(defun vastai--offer-details (offer)
+  "Format OFFER alist as a human-readable detail string."
+  (vastai--format-alist
+   (seq-filter (lambda (pair) (not (null (cdr pair))))
+               (list (cons "Offer ID"    (alist-get 'id offer))
+                     (cons "GPU"         (format "%dx %s"
+                                                  (alist-get 'num_gpus offer 0)
+                                                  (alist-get 'gpu_name offer "")))
+                     (cons "GPU RAM"     (when (alist-get 'gpu_ram offer)
+                                           (format "%s GB" (alist-get 'gpu_ram offer))))
+                     (cons "Price"       (format "$%.4f/hr"
+                                                  (alist-get 'dph_total offer 0.0)))
+                     (cons "Location"    (alist-get 'geolocation offer))
+                     (cons "Reliability" (alist-get 'reliability2 offer))
+                     (cons "Upload"      (when (alist-get 'inet_up offer)
+                                           (format "%s Mbps" (alist-get 'inet_up offer))))
+                     (cons "Download"    (when (alist-get 'inet_down offer)
+                                           (format "%s Mbps"
+                                                   (alist-get 'inet_down offer))))))))
+
+(defun vastai-search-offers ()
+  "Search Vast.ai GPU offers via completing-read."
+  (interactive)
+  (let* ((filter-str (read-string "Filter (e.g. gpu_name=RTX_4090 num_gpus=1): "))
+         (offers (vastai--fetch-offers filter-str))
+         (candidates (mapcar #'vastai--format-offer offers)))
+    (if (seq-empty-p candidates)
+        (message "vastai: no offers matched those filters")
+      (let* ((choice (completing-read "Offer: " candidates nil t))
+             (id (vastai--offer-id-from-candidate choice))
+             (offer (seq-find (lambda (o)
+                                (equal (format "%s" (alist-get 'id o)) id))
+                              offers)))
+        (vastai--display (format "Offer %s" id)
+                         (vastai--offer-details offer))))))
+
 (provide 'vastai)
 ;;; vastai.el ends here
