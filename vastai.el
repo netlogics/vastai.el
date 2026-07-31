@@ -2,7 +2,7 @@
 
 ;; Author: Phil
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (transient "0.4.0"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Keywords: tools, cloud, gpu
 
 ;;; Commentary:
@@ -38,9 +38,10 @@
   "Return the Vast.ai API key or signal `user-error' if unavailable."
   (or vastai-api-key
       (when (file-readable-p vastai-api-key-file)
-        (string-trim (with-temp-buffer
-                       (insert-file-contents vastai-api-key-file)
-                       (buffer-string))))
+        (let ((key (string-trim (with-temp-buffer
+                                  (insert-file-contents vastai-api-key-file)
+                                  (buffer-string)))))
+          (unless (string-empty-p key) key)))
       (user-error
        "vastai: set vastai-api-key or run: vastai set api-key <KEY>")))
 
@@ -52,21 +53,27 @@
       url)))
 
 (defun vastai--parse-json-response (buf)
-  "Parse JSON body from HTTP response buffer BUF. Return alist or nil."
+  "Parse JSON body from HTTP response buffer BUF. Return alist or nil on error."
   (with-current-buffer buf
     (goto-char (point-min))
-    (when (re-search-forward "\r?\n\r?\n" nil t)
-      (condition-case err
-          (json-read)
-        (error (message "vastai: JSON parse error: %s" err) nil)))))
+    (if (not (re-search-forward "^HTTP/[0-9.]+ \\([0-9]+\\)" nil t))
+        (progn (message "vastai: could not parse HTTP status") nil)
+      (let ((status (string-to-number (match-string 1))))
+        (if (not (and (>= status 200) (< status 300)))
+            (progn (message "vastai: HTTP error %d" status) nil)
+          (goto-char (point-min))
+          (when (re-search-forward "\r?\n\r?\n" nil t)
+            (condition-case err
+                (json-read)
+              (error (message "vastai: JSON parse error: %s" err) nil))))))))
 
 (defun vastai--request (method endpoint &optional params body)
   "Make a METHOD request to ENDPOINT with query PARAMS and JSON BODY.
 Returns parsed alist or nil on error."
   (let* ((url-request-method method)
          (url-request-extra-headers
-          `(("Authorization" . ,(concat "Bearer " (vastai--api-key)))
-            ("Content-Type" . "application/json")))
+          (append `(("Authorization" . ,(concat "Bearer " (vastai--api-key))))
+                  (when body '(("Content-Type" . "application/json")))))
          (url-request-data
           (when body
             (encode-coding-string (json-encode body) 'utf-8)))
@@ -81,7 +88,7 @@ Returns parsed alist or nil on error."
 (defun vastai--format-alist (alist)
   "Format ALIST as aligned key: value lines."
   (mapconcat (lambda (pair)
-               (format "%-24s %s" (car pair) (cdr pair)))
+               (format "%-23s: %s" (car pair) (cdr pair)))
              alist "\n"))
 
 (defun vastai--display (title content)
@@ -92,7 +99,7 @@ Returns parsed alist or nil on error."
         (erase-buffer)
         (insert title "\n" (make-string (length title) ?─) "\n\n")
         (insert content "\n"))
-      (special-mode)
+      (unless (eq major-mode 'special-mode) (special-mode))
       (goto-char (point-min)))
     (pop-to-buffer buf)))
 
@@ -165,10 +172,14 @@ Returns parsed alist or nil on error."
   "Show details of the instance stored in the current transient's scope."
   (interactive)
   (let* ((id (oref transient--prefix scope))
-         (result (vastai--request "GET" (format "/api/v0/instances/%s/" id)))
-         (instance (or (alist-get 'instance result) result)))
-    (vastai--display (format "Instance %s" id)
-                     (vastai--instance-details instance))))
+         (instances (vastai--fetch-instances))
+         (instance (seq-find (lambda (i)
+                               (equal (format "%s" (alist-get 'id i)) id))
+                             instances)))
+    (if instance
+        (vastai--display (format "Instance %s" id)
+                         (vastai--instance-details instance))
+      (message "vastai: instance %s not found" id))))
 
 (transient-define-prefix vastai--instance-action (id)
   "Actions for a Vast.ai instance. ID is stored as scope."
@@ -195,13 +206,18 @@ Returns parsed alist or nil on error."
 
 (defun vastai--parse-filters (filter-string)
   "Parse FILTER-STRING like \"gpu_name=RTX_4090 num_gpus=1\" into alist.
-Each token must be KEY=VALUE. Underscores in values are replaced with spaces."
+Each token must be KEY=VALUE. Unquoted values have underscores replaced with
+spaces (e.g. RTX_4090 -> \"RTX 4090\"). Quote values to preserve underscores:
+image_uuid=\"some_id_v1\" keeps underscores."
   (when (and filter-string (not (string-empty-p filter-string)))
     (mapcar (lambda (token)
               (if (string-match "\\([^=]+\\)=\\(.+\\)" token)
-                  (cons (match-string 1 token)
-                        `((eq . ,(replace-regexp-in-string
-                                  "_" " " (match-string 2 token)))))
+                  (let* ((key (match-string 1 token))
+                         (raw (match-string 2 token))
+                         (val (if (string-match "\\`[\"']\\(.*\\)[\"']\\'" raw)
+                                  (match-string 1 raw)
+                                (replace-regexp-in-string "_" " " raw))))
+                    (cons key `((eq . ,val))))
                 (user-error "vastai: invalid filter token: %s" token)))
             (split-string filter-string " " t))))
 
@@ -309,9 +325,11 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
     (if (seq-empty-p candidates)
         (message "vastai: no templates found")
       (let* ((choice (completing-read "Template: " candidates nil t))
-             (name (car (split-string choice " | " t)))
+             (parts (split-string choice " | " t))
+             (name (car parts))
+             (hash-id (nth 2 parts))
              (template (seq-find (lambda (tmpl)
-                                   (equal (alist-get 'name tmpl) name))
+                                   (equal (alist-get 'hash_id tmpl) hash-id))
                                  templates)))
         (vastai--display (format "Template: %s" name)
                          (vastai--template-details template))))))

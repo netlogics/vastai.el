@@ -50,6 +50,16 @@
                            '[((id . 123))]))))
       (kill-buffer buf))))
 
+(ert-deftest vastai-test-parse-json-response-error-status ()
+  "Returns nil and messages on non-2xx HTTP status."
+  (let ((buf (generate-new-buffer " *vastai-test-error-response*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n")
+          (insert "{\"error\":\"Unauthorized\"}")
+          (should (null (vastai--parse-json-response buf))))
+      (kill-buffer buf))))
+
 (ert-deftest vastai-test-display ()
   "Opens *vastai* buffer with title and content."
   (vastai--display "Test Title" "line one\nline two")
@@ -94,7 +104,11 @@
     (should (equal (alist-get "gpu_name" result nil nil #'equal)
                    '((eq . "RTX 4090"))))
     (should (equal (alist-get "num_gpus" result nil nil #'equal)
-                   '((eq . "1"))))))
+                   '((eq . "1")))))
+  ;; Quoted value preserves underscores
+  (let ((result2 (vastai--parse-filters "image_uuid=\"some_id_v1\"")))
+    (should (equal (alist-get "image_uuid" result2 nil nil #'equal)
+                   '((eq . "some_id_v1"))))))
 
 (ert-deftest vastai-test-parse-filters-empty ()
   "Returns nil for empty or nil filter string."
