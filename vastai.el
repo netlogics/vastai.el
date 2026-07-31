@@ -96,5 +96,102 @@ Returns parsed alist or nil on error."
       (goto-char (point-min)))
     (pop-to-buffer buf)))
 
+(defun vastai--fetch-instances ()
+  "Fetch list of instances from the API. Returns vector of alists."
+  (let ((result (vastai--request "GET" "/api/v1/instances/")))
+    (when result
+      (or (alist-get 'instances result) []))))
+
+(defun vastai--format-instance (instance)
+  "Format INSTANCE alist as a completing-read candidate string."
+  (format "%s | %s | %dx %s | $%.4f/hr | %s"
+          (alist-get 'id instance "")
+          (alist-get 'actual_status instance "unknown")
+          (alist-get 'num_gpus instance 0)
+          (alist-get 'gpu_name instance "")
+          (alist-get 'dph_total instance 0.0)
+          (or (alist-get 'label instance) "")))
+
+(defun vastai--instance-id-from-candidate (candidate)
+  "Extract instance ID string from a formatted CANDIDATE."
+  (car (split-string candidate " | " t)))
+
+(defun vastai--instance-details (instance)
+  "Format INSTANCE alist as a human-readable detail string."
+  (vastai--format-alist
+   (seq-filter (lambda (pair) (not (null (cdr pair))))
+               (list (cons "ID"       (alist-get 'id instance))
+                     (cons "Status"   (alist-get 'actual_status instance))
+                     (cons "GPU"      (format "%dx %s"
+                                              (alist-get 'num_gpus instance 0)
+                                              (alist-get 'gpu_name instance "")))
+                     (cons "Price"    (format "$%.4f/hr"
+                                              (alist-get 'dph_total instance 0.0)))
+                     (cons "Label"    (alist-get 'label instance))
+                     (cons "Image"    (alist-get 'image_uuid instance))
+                     (cons "Disk"     (when (alist-get 'disk_space instance)
+                                        (format "%s GB"
+                                                (alist-get 'disk_space instance))))
+                     (cons "SSH Host" (alist-get 'ssh_host instance))
+                     (cons "SSH Port" (alist-get 'ssh_port instance))))))
+
+(defun vastai--cmd-stop ()
+  "Stop the instance stored in the current transient's scope."
+  (interactive)
+  (let ((id (oref transient--prefix scope)))
+    (when (y-or-n-p (format "Stop instance %s? " id))
+      (vastai--request "PUT" (format "/api/v0/instances/%s/" id)
+                       nil '((state . "stopped")))
+      (message "vastai: stop requested for instance %s" id))))
+
+(defun vastai--cmd-start ()
+  "Start the instance stored in the current transient's scope."
+  (interactive)
+  (let ((id (oref transient--prefix scope)))
+    (when (y-or-n-p (format "Start instance %s? " id))
+      (vastai--request "PUT" (format "/api/v0/instances/%s/" id)
+                       nil '((state . "running")))
+      (message "vastai: start requested for instance %s" id))))
+
+(defun vastai--cmd-delete ()
+  "Permanently delete the instance stored in the current transient's scope."
+  (interactive)
+  (let ((id (oref transient--prefix scope)))
+    (when (y-or-n-p (format "PERMANENTLY DELETE instance %s? " id))
+      (vastai--request "DELETE" (format "/api/v0/instances/%s/" id))
+      (message "vastai: deleted instance %s" id))))
+
+(defun vastai--cmd-show ()
+  "Show details of the instance stored in the current transient's scope."
+  (interactive)
+  (let* ((id (oref transient--prefix scope))
+         (result (vastai--request "GET" (format "/api/v0/instances/%s/" id)))
+         (instance (or (alist-get 'instance result) result)))
+    (vastai--display (format "Instance %s" id)
+                     (vastai--instance-details instance))))
+
+(transient-define-prefix vastai--instance-action (id)
+  "Actions for a Vast.ai instance. ID is stored as scope."
+  [:description
+   (lambda ()
+     (format "Instance %s" (oref transient--prefix scope)))
+   [("s" "Stop"         vastai--cmd-stop)
+    ("S" "Start"        vastai--cmd-start)
+    ("d" "Delete"       vastai--cmd-delete)
+    ("i" "Show details" vastai--cmd-show)]]
+  (interactive "s")
+  (transient-setup 'vastai--instance-action nil nil :scope id))
+
+(defun vastai-list-instances ()
+  "List Vast.ai instances via completing-read, then show action transient."
+  (interactive)
+  (let* ((instances (vastai--fetch-instances))
+         (candidates (mapcar #'vastai--format-instance instances)))
+    (if (seq-empty-p candidates)
+        (message "vastai: no instances found")
+      (let* ((choice (completing-read "Instance: " candidates nil t))
+             (id (vastai--instance-id-from-candidate choice)))
+        (vastai--instance-action id)))))
+
 (provide 'vastai)
 ;;; vastai.el ends here

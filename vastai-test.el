@@ -69,5 +69,24 @@
     (should (string-match-p "GPU" result))
     (should (string-match-p "RTX 4090" result))))
 
+(ert-deftest vastai-test-format-instance ()
+  "Formats an instance alist into a completing-read candidate string."
+  (let ((instance '((id . 12345678)
+                    (actual_status . "running")
+                    (num_gpus . 1)
+                    (gpu_name . "RTX 4090")
+                    (dph_total . 0.35)
+                    (label . "my-label"))))
+    (let ((result (vastai--format-instance instance)))
+      (should (string-match-p "12345678" result))
+      (should (string-match-p "running" result))
+      (should (string-match-p "RTX 4090" result))
+      (should (string-match-p "0.35" result)))))
+
+(ert-deftest vastai-test-instance-id-from-candidate ()
+  "Extracts instance ID from a formatted candidate string."
+  (let ((candidate "12345678 | running | 1x RTX 4090 | $0.3500/hr | my-label"))
+    (should (equal (vastai--instance-id-from-candidate candidate) "12345678"))))
+
 (provide 'vastai-test)
 ;;; vastai-test.el ends here
