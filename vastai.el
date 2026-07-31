@@ -34,5 +34,15 @@
   :type 'file
   :group 'vastai)
 
+(defun vastai--api-key ()
+  "Return the Vast.ai API key or signal `user-error' if unavailable."
+  (or vastai-api-key
+      (when (file-readable-p vastai-api-key-file)
+        (string-trim (with-temp-buffer
+                       (insert-file-contents vastai-api-key-file)
+                       (buffer-string))))
+      (user-error
+       "vastai: set vastai-api-key or run: vastai set api-key <KEY>")))
+
 (provide 'vastai)
 ;;; vastai.el ends here
