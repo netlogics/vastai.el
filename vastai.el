@@ -192,7 +192,8 @@ Returns parsed alist or nil on error."
     ("S" "Start"        vastai--cmd-start)
     ("d" "Delete"       vastai--cmd-delete)
     ("i" "Show details" vastai--cmd-show)]]
-  (interactive "s"))
+  (interactive "s")
+  (transient-setup 'vastai--instance-action nil nil id))
 
 (defun vastai-list-instances ()
   "List Vast.ai instances via completing-read, then show action transient."
@@ -384,6 +385,8 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
    ("t" "List & select template"  vastai-list-templates)]
   ["Costs"
    ("c" "Show recent charges"     vastai-show-costs)])
+  (interactive)
+  (transient-setup 'vastai))
 
 (provide 'vastai)
 ;;; vastai.el ends here
