@@ -101,7 +101,9 @@ Returns parsed alist or nil on error."
         (insert content "\n"))
       (unless (eq major-mode 'special-mode) (special-mode))
       (goto-char (point-min)))
-    (pop-to-buffer buf)))
+    (display-buffer buf '(display-buffer-same-window))
+    (when-let ((win (get-buffer-window buf)))
+      (fit-window-to-buffer win nil 8)))
 
 (defun vastai--fetch-instances ()
   "Fetch list of instances from the API. Returns vector of alists."
@@ -190,8 +192,7 @@ Returns parsed alist or nil on error."
     ("S" "Start"        vastai--cmd-start)
     ("d" "Delete"       vastai--cmd-delete)
     ("i" "Show details" vastai--cmd-show)]]
-  (interactive "s")
-  (transient-setup 'vastai--instance-action nil nil :scope id))
+  (interactive "s"))
 
 (defun vastai-list-instances ()
   "List Vast.ai instances via completing-read, then show action transient."
