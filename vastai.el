@@ -91,6 +91,21 @@ Returns parsed alist or nil on error."
                (format "%-23s: %s" (car pair) (cdr pair)))
              alist "\n"))
 
+(defvar vastai-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "l") #'vastai-list-instances)
+    (define-key map (kbd "s") #'vastai-search-offers)
+    (define-key map (kbd "t") #'vastai-list-templates)
+    (define-key map (kbd "c") #'vastai-show-costs)
+    (define-key map (kbd "?") #'vastai)
+    map)
+  "Keymap for `vastai-mode'.")
+
+(define-derived-mode vastai-mode special-mode "Vast.ai"
+  "Major mode for Vast.ai output buffers.
+\\{vastai-mode-map}")
+
 (defun vastai--display (title content)
   "Display CONTENT under TITLE in the *vastai* read-only buffer."
   (let ((buf (get-buffer-create "*vastai*")))
@@ -98,8 +113,11 @@ Returns parsed alist or nil on error."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert title "\n" (make-string (length title) ?─) "\n\n")
-        (insert content "\n"))
-      (unless (eq major-mode 'special-mode) (special-mode))
+        (insert content "\n\n")
+        (insert (propertize
+                 "Keys: l=instances  s=search  t=templates  c=costs  ?=menu  q=quit"
+                 'face 'shadow)))
+      (unless (eq major-mode 'vastai-mode) (vastai-mode))
       (goto-char (point-min)))
     (display-buffer buf '(display-buffer-same-window))
     (when-let ((win (get-buffer-window buf)))
@@ -185,13 +203,11 @@ Returns parsed alist or nil on error."
 
 (transient-define-prefix vastai--instance-action (id)
   "Actions for a Vast.ai instance. ID is stored as scope."
-  [:description
-   (lambda ()
-     (format "Instance %s" (oref transient--prefix scope)))
-   [("s" "Stop"         vastai--cmd-stop)
-    ("S" "Start"        vastai--cmd-start)
-    ("d" "Delete"       vastai--cmd-delete)
-    ("i" "Show details" vastai--cmd-show)]]
+  [:description (lambda () (format "Instance %s" (oref transient--prefix scope)))
+   ("s" "Stop"         vastai--cmd-stop)
+   ("S" "Start"        vastai--cmd-start)
+   ("d" "Delete"       vastai--cmd-delete)
+   ("i" "Show details" vastai--cmd-show)]
   (interactive "s")
   (transient-setup 'vastai--instance-action nil nil id))
 
@@ -275,8 +291,52 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
                                            (format "%s Mbps"
                                                    (alist-get 'inet_down offer))))))))
 
+(defvar vastai--current-offer nil
+  "Most recently selected offer alist; used by offer action commands.")
+
+(defun vastai--cmd-provision ()
+  "Provision (rent) the offer stored in the current transient's scope."
+  (interactive)
+  (let* ((id (oref transient--prefix scope))
+         (image (read-string "Docker image: " "pytorch/pytorch:latest"))
+         (disk (string-to-number (read-string "Disk GB: " "20")))
+         (label (read-string "Label (optional): ")))
+    (when (y-or-n-p (format "Provision offer %s with %s, %d GB disk? " id image disk))
+      (let ((result (vastai--request
+                     "PUT" (format "/api/v0/asks/%s/" id)
+                     nil
+                     `((client_id . "me")
+                       (image . ,image)
+                       (disk . ,disk)
+                       (label . ,label)
+                       (onstart . "")
+                       (runtype . "args")
+                       (use_ssh . t)
+                       (ssh_direct . :json-false)
+                       (use_jupyter_lab . :json-false)))))
+        (if result
+            (message "vastai: instance created from offer %s" id)
+          (message "vastai: failed to provision offer %s" id))))))
+
+(defun vastai--cmd-offer-show ()
+  "Show details of the offer stored in the current transient's scope."
+  (interactive)
+  (let ((id (oref transient--prefix scope)))
+    (if vastai--current-offer
+        (vastai--display (format "Offer %s" id)
+                         (vastai--offer-details vastai--current-offer))
+      (message "vastai: no offer details cached"))))
+
+(transient-define-prefix vastai--offer-action (id)
+  "Actions for a Vast.ai offer. ID is stored as scope."
+  [:description (lambda () (format "Offer %s" (oref transient--prefix scope)))
+   ("p" "Provision (rent)" vastai--cmd-provision)
+   ("i" "Show details"     vastai--cmd-offer-show)]
+  (interactive "s")
+  (transient-setup 'vastai--offer-action nil nil id))
+
 (defun vastai-search-offers ()
-  "Search Vast.ai GPU offers via completing-read."
+  "Search Vast.ai GPU offers via completing-read, then show action transient."
   (interactive)
   (let* ((filter-str (read-string "Filter (e.g. gpu_name=RTX_4090 num_gpus=1): "))
          (offers (vastai--fetch-offers filter-str))
@@ -288,8 +348,10 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
              (offer (seq-find (lambda (o)
                                 (equal (format "%s" (alist-get 'id o)) id))
                               offers)))
+        (setq vastai--current-offer offer)
         (vastai--display (format "Offer %s" id)
-                         (vastai--offer-details offer))))))
+                         (vastai--offer-details offer))
+        (vastai--offer-action id)))))
 
 (defun vastai--fetch-templates ()
   "Fetch list of templates from the API. Returns vector of alists."
