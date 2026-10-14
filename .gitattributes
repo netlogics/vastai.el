@@ -1,0 +1,5 @@
+# Beads append-only audit log: entries are never rewritten and each line
+# carries its own id/created_at, so line order is irrelevant. Union merge
+# lets git keep both sides instead of raising a trivial conflict when two
+# branches each append entries.
+.beads/interactions.jsonl merge=union
