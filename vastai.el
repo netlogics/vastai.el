@@ -34,6 +34,22 @@
   :type 'file
   :group 'vastai)
 
+(defcustom vastai-offer-type "on-demand"
+  "Type of GPU offers that `vastai-search-offers' queries.
+
+The value maps directly to the Vast.ai API `type' filter:
+
+- \"on-demand\"  fixed-price offers (the default),
+- \"bid\"        interruptible (spot) offers, cheaper but preemptible,
+- \"reserved\"   reserved-capacity offers.
+
+Toggle the common on-demand/interruptible choice interactively with
+`vastai-toggle-offer-type'."
+  :type '(choice (const :tag "On-demand" "on-demand")
+                 (const :tag "Interruptible (bid)" "bid")
+                 (const :tag "Reserved" "reserved"))
+  :group 'vastai)
+
 (defun vastai--api-key ()
   "Return the Vast.ai API key or signal `user-error' if unavailable."
   (or vastai-api-key
@@ -53,19 +69,32 @@
       url)))
 
 (defun vastai--parse-json-response (buf)
-  "Parse JSON body from HTTP response buffer BUF. Return alist or nil on error."
+  "Parse JSON body from HTTP response buffer BUF. Return alist or nil on error.
+
+On a non-2xx status, return nil and surface the server's error message
+when one is present, so authentication or parameter problems become
+visible instead of silently yielding an empty result."
   (with-current-buffer buf
     (goto-char (point-min))
     (if (not (re-search-forward "^HTTP/[0-9.]+ \\([0-9]+\\)" nil t))
         (progn (message "vastai: could not parse HTTP status") nil)
-      (let ((status (string-to-number (match-string 1))))
+      (let* ((status (string-to-number (match-string 1)))
+             (has-body (re-search-forward "\r?\n\r?\n" nil t))
+             (body (when has-body
+                     (condition-case err
+                         (json-read)
+                       (error (message "vastai: JSON parse error: %s" err)
+                              nil)))))
         (if (not (and (>= status 200) (< status 300)))
-            (progn (message "vastai: HTTP error %d" status) nil)
-          (goto-char (point-min))
-          (when (re-search-forward "\r?\n\r?\n" nil t)
-            (condition-case err
-                (json-read)
-              (error (message "vastai: JSON parse error: %s" err) nil))))))))
+            (progn
+              (message "vastai: HTTP %d%s" status
+                       (if (listp body)
+                           (let ((detail (or (alist-get 'msg body)
+                                             (alist-get 'error body))))
+                             (if detail (concat ": " (format "%s" detail)) ""))
+                         ""))
+              nil)
+          body)))))
 
 (defun vastai--request (method endpoint &optional params body)
   "Make a METHOD request to ENDPOINT with query PARAMS and JSON BODY.
@@ -98,6 +127,7 @@ Returns parsed alist or nil on error."
     (define-key map (kbd "s") #'vastai-search-offers)
     (define-key map (kbd "t") #'vastai-list-templates)
     (define-key map (kbd "c") #'vastai-show-costs)
+    (define-key map (kbd "T") #'vastai-toggle-offer-type)
     (define-key map (kbd "?") #'vastai)
     map)
   "Keymap for `vastai-mode'.")
@@ -115,7 +145,7 @@ Returns parsed alist or nil on error."
         (insert title "\n" (make-string (length title) ?─) "\n\n")
         (insert content "\n\n")
         (insert (propertize
-                 "Keys: l=instances  s=search  t=templates  c=costs  ?=menu  q=quit"
+                 "Keys: l=instances  s=search  t=templates  c=costs  T=toggle type  ?=menu  q=quit"
                  'face 'shadow)))
       (unless (eq major-mode 'vastai-mode) (vastai-mode))
       (goto-char (point-min)))
@@ -239,16 +269,17 @@ image_uuid=\"some_id_v1\" keeps underscores."
                 (user-error "vastai: invalid filter token: %s" token)))
             (split-string filter-string " " t))))
 
-(defun vastai--build-search-body (user-filters)
+(defun vastai--build-search-body (user-filters &optional offer-type)
   "Build the complete JSON body alist for a bundle search request.
-USER-FILTERS is an alist from `vastai--parse-filters'."
-  (append '((verified . ((eq . t)))
-             (external . ((eq . :json-false)))
-             (rentable . ((eq . t)))
-             (type . "on-demand")
-             (allocated_storage . 5.0)
-             (order . [["score" "desc"]]))
-           user-filters))
+USER-FILTERS is an alist from `vastai--parse-filters'.  OFFER-TYPE is
+the API `type' filter and defaults to `vastai-offer-type'."
+  (append `((verified . ((eq . t)))
+            (external . ((eq . :json-false)))
+            (rentable . ((eq . t)))
+            (type . ,(or offer-type vastai-offer-type))
+            (allocated_storage . 5.0)
+            (order . [["score" "desc"]]))
+          user-filters))
 
 (defun vastai--fetch-offers (filter-string)
   "Fetch offers matching FILTER-STRING. Returns vector of alists."
@@ -335,10 +366,24 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
   (interactive "s")
   (transient-setup 'vastai--offer-action nil nil id))
 
+(defun vastai-toggle-offer-type ()
+  "Toggle `vastai-offer-type' between on-demand and interruptible offers.
+
+On-demand offers are fixed-price; interruptible (bid) offers are
+cheaper but can be preempted by other users."
+  (interactive)
+  (setq vastai-offer-type
+        (if (equal vastai-offer-type "bid") "on-demand" "bid"))
+  (message "vastai: offer type is now %s"
+           (if (equal vastai-offer-type "bid")
+               "interruptible (bid)" "on-demand")))
+
 (defun vastai-search-offers ()
   "Search Vast.ai GPU offers via completing-read, then show action transient."
   (interactive)
-  (let* ((filter-str (read-string "Filter (e.g. gpu_name=RTX_4090 num_gpus=1): "))
+  (let* ((filter-str (read-string
+                      (format "Filter (%s offers, e.g. gpu_name=RTX_4090 num_gpus=1): "
+                              vastai-offer-type)))
          (offers (vastai--fetch-offers filter-str))
          (candidates (mapcar #'vastai--format-offer offers)))
     (if (seq-empty-p candidates)
@@ -354,8 +399,14 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
         (vastai--offer-action id)))))
 
 (defun vastai--fetch-templates ()
-  "Fetch list of templates from the API. Returns vector of alists."
-  (let ((result (vastai--request "GET" "/api/v0/template/")))
+  "Fetch list of templates from the API. Returns vector of alists.
+
+The endpoint requires JSON-encoded `select_cols' and `select_filters'
+query parameters; without them the API responds with HTTP 400."
+  (let ((result (vastai--request
+                 "GET" "/api/v0/template/"
+                 '(("select_cols" "[\"*\"]")
+                   ("select_filters" "{}")))))
     (when result
       (or (alist-get 'templates result) []))))
 
@@ -409,14 +460,14 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
                    ("limit" "100")))
          (result (vastai--request "GET" "/api/v0/charges/" params)))
     (when result
-      (or (alist-get 'charges result) []))))
+      (or (alist-get 'results result) []))))
 
 (defun vastai--format-charge (charge)
   "Format a CHARGE alist as a single display line."
-  (format "%-12s %-20s $%8.4f  %s"
-          (alist-get 'id charge "")
+  (format "%-10s %-18s $%8.3f  %s"
           (or (alist-get 'type charge) "")
-          (/ (or (alist-get 'amount_cents charge) 0) 100.0)
+          (or (alist-get 'source charge) "")
+          (or (alist-get 'amount charge) 0.0)
           (or (alist-get 'description charge) "")))
 
 (defun vastai-show-costs ()
@@ -425,16 +476,15 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
   (let* ((days-str (read-string "Days to show (default 7): " nil nil "7"))
          (days (string-to-number days-str))
          (charges (vastai--fetch-charges days))
-         (total (/ (seq-reduce (lambda (acc c)
-                                 (+ acc (or (alist-get 'amount_cents c) 0)))
-                               charges 0)
-                   100.0)))
+         (total (seq-reduce (lambda (acc c)
+                              (+ acc (or (alist-get 'amount c) 0.0)))
+                            charges 0.0)))
     (if (seq-empty-p charges)
         (message "vastai: no charges found for last %d days" days)
       (vastai--display
        (format "Charges — last %d days" days)
        (concat (mapconcat #'vastai--format-charge charges "\n")
-               (format "\n\n%-34s $%8.4f" "TOTAL" total))))))
+               (format "\n\n%-34s $%8.3f" "TOTAL" total))))))
 
 ;;;###autoload (autoload 'vastai "vastai" "Vast.ai GPU cloud management." t)
 (transient-define-prefix vastai ()
@@ -442,7 +492,12 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
   ["Instances"
    ("l" "List & act on instances" vastai-list-instances)]
   ["Search"
-   ("s" "Search offers"           vastai-search-offers)]
+   ("s" "Search offers"           vastai-search-offers)
+   ("T" (lambda ()
+          (format "Toggle offer type (now %s)"
+                  (if (equal vastai-offer-type "bid")
+                      "interruptible" "on-demand")))
+    vastai-toggle-offer-type :transient t)]
   ["Templates"
    ("t" "List & select template"  vastai-list-templates)]
   ["Costs"

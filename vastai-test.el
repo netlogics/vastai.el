@@ -3,6 +3,8 @@
 ;;; Code:
 
 (require 'ert)
+(require 'seq)
+(require 'cl-lib)
 (require 'vastai)
 
 (ert-deftest vastai-test-api-key-from-custom-var ()
@@ -142,6 +144,68 @@
       (should (string-match-p "my-pytorch" result))
       (should (string-match-p "vastai/pytorch:latest" result))
       (should (string-match-p "abc123def456" result)))))
+
+(ert-deftest vastai-test-build-search-body-default-type ()
+  "Search body defaults to the on-demand offer type."
+  (should (equal (alist-get 'type (vastai--build-search-body nil))
+                 "on-demand")))
+
+(ert-deftest vastai-test-build-search-body-explicit-type ()
+  "An explicit OFFER-TYPE argument overrides the default."
+  (should (equal (alist-get 'type (vastai--build-search-body nil "bid"))
+                 "bid")))
+
+(ert-deftest vastai-test-build-search-body-honors-custom ()
+  "Search body follows `vastai-offer-type' when no arg is given."
+  (let ((vastai-offer-type "reserved"))
+    (should (equal (alist-get 'type (vastai--build-search-body nil))
+                   "reserved"))))
+
+(ert-deftest vastai-test-build-search-body-merges-user-filters ()
+  "User filters are appended without dropping the base filters."
+  (let ((body (vastai--build-search-body
+               '(("gpu_name" . ((eq . "RTX 4090")))))))
+    (should (equal (alist-get "gpu_name" body nil nil #'equal)
+                   '((eq . "RTX 4090"))))
+    (should (equal (alist-get 'type body) "on-demand"))
+    (should (equal (alist-get 'rentable body) '((eq . t))))
+    (should (equal (alist-get 'order body) [["score" "desc"]]))))
+
+(ert-deftest vastai-test-toggle-offer-type ()
+  "Toggling flips between on-demand and bid."
+  (let ((vastai-offer-type "on-demand"))
+    (vastai-toggle-offer-type)
+    (should (equal vastai-offer-type "bid"))
+    (vastai-toggle-offer-type)
+    (should (equal vastai-offer-type "on-demand"))))
+
+(ert-deftest vastai-test-format-charge ()
+  "Formats a charge using the real API field names."
+  (let ((charge '((type . "instance")
+                  (source . "instance-54511469")
+                  (amount . 0.023)
+                  (description . "Instance 54511469 Charges - 1 day"))))
+    (let ((result (vastai--format-charge charge)))
+      (should (string-match-p "instance" result))
+      (should (string-match-p "instance-54511469" result))
+      (should (string-match-p "0.023" result))
+      (should (string-match-p "Charges - 1 day" result)))))
+
+(ert-deftest vastai-test-parse-json-response-surfaces-error-message ()
+  "A non-2xx response surfaces the server's error message."
+  (let ((buf (generate-new-buffer " *vastai-test-errmsg*"))
+        (messages nil))
+    (unwind-protect
+        (with-current-buffer buf
+          (insert "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n")
+          (insert "{\"success\":false,\"msg\":\"invalid api key\"}")
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format fmt args) messages))))
+            (should (null (vastai--parse-json-response buf)))
+            (should (seq-some (lambda (m) (string-match-p "invalid api key" m))
+                              messages))))
+      (kill-buffer buf))))
 
 (provide 'vastai-test)
 ;;; vastai-test.el ends here
