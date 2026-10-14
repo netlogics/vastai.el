@@ -384,7 +384,7 @@ USER-FILTERS is an alist from `vastai--parse-filters'."
   ["Templates"
    ("t" "List & select template"  vastai-list-templates)]
   ["Costs"
-   ("c" "Show recent charges"     vastai-show-costs)])
+   ("c" "Show recent charges"     vastai-show-costs)]
   (interactive)
   (transient-setup 'vastai))
 
